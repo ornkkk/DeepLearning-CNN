@@ -48,6 +48,9 @@ def create_yolo_model(input_layer, configs, num_classes):
     output_filters = []
     filters = []
     scale = 0
+    output_pred = list()
+
+    current_layer = current_layer/255.0
     
     for index, layer in enumerate(configs[1:]):
         #check the type of config
