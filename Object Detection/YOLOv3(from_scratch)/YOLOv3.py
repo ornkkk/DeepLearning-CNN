@@ -135,12 +135,12 @@ def create_yolo_model(input_layer, configs, num_classes):
             
             out_shape = current_layer.get_shape().as_list()
             input_dim = input_layer.shape[1]
+            num_anchors = len(anchors)
             #batch_size = data.shape[0]
             
             stride = input_dim // out_shape[1]
             grid_size = input_dim // stride
             bounding_box_attrs = 5 + num_classes
-            num_anchors = len(anchors)
 
             current_layer = tf.reshape(current_layer, [-1, bounding_box_attrs*num_anchors, grid_size*grid_size])
             current_layer = tf.transpose(current_layer, perm=[0, 2, 1])
@@ -187,7 +187,36 @@ def create_yolo_model(input_layer, configs, num_classes):
             box *= stride
 
             pred = tf.concat([box, classes], axis=-1)
+            
+            '''
+            current_layer = tf.reshape(current_layer, [-1, num_anchors * out_shape[1] * out_shape[2], 5 + num_classes])
 
+            box_centers = current_layer[:, :, 0:2]
+            box_shapes = current_layer[:, :, 2:4]
+            confidence = current_layer[:, :, 4:5]
+            classes = current_layer[:, :, 5:num_classes + 5]
+
+            box_centers = tf.sigmoid(box_centers)
+            confidence = tf.sigmoid(confidence)
+            classes = tf.sigmoid(classes)
+
+            anchors = tf.tile(anchors, [out_shape[1] * out_shape[2], 1])
+            box_shapes = tf.exp(box_shapes) * tf.cast(anchors, dtype=tf.float32)
+
+            x = tf.range(out_shape[1], dtype=tf.float32)
+            y = tf.range(out_shape[2], dtype=tf.float32)
+            cx, cy = tf.meshgrid(x, y)
+            cx = tf.reshape(cx, (-1, 1))
+            cy = tf.reshape(cy, (-1, 1))
+            cxy = tf.concat([cx, cy], axis=-1)
+            cxy = tf.tile(cxy, [1, num_anchors])
+            cxy = tf.reshape(cxy, [1, -1, 2])
+            strides = (input_dim // out_shape[1], \
+                        input_dim // out_shape[2])
+            box_centers = (box_centers + cxy) * strides
+
+            pred = tf.concat([box_centers, box_shapes, confidence, classes], axis=-1)
+            '''
             if scale:
                 output_pred = tf.concat([output_pred, pred], axis=1)
             else:
@@ -245,6 +274,7 @@ def load_weights(model, configs, weightfile):
 if __name__=="__main__":
     weightfile = "./weights/yolov3.weights"
     cfg_file_path = "./cfg/yolov3.cfg"
+    test_file = "./dog-cycle-car.png"
     configs = parse_cfg_file(cfg_file_path)
     input_shape=(416, 416, 3)
     num_classes=80
