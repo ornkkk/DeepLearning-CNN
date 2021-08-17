@@ -1,3 +1,3 @@
 # DeepLearning-CNN
 
-To be Updated
+To be updated
