@@ -6,6 +6,7 @@ from tensorflow.keras.layers import Conv2D, ZeroPadding2D, BatchNormalization
 from tensorflow.keras.layers import Add, Input, LeakyReLU, UpSampling2D, Concatenate
 from tensorflow.keras import Model
 import cv2
+import time
 
 
 def parse_cfg_file(cfg_file_path):
@@ -56,6 +57,7 @@ def create_yolo_model(input_layer, configs, num_classes):
         #check the type of config
         #create a new layer for the config
         #append to module_list
+        #--------------------------------------------------------------------------------------
         if (layer["type"] == "convolutional"):
             #Get the info about the layer
             activation = layer["activation"]
@@ -73,7 +75,7 @@ def create_yolo_model(input_layer, configs, num_classes):
 
 
             if padding:
-                padd = (kernel_size - 1) // 2
+                padd = (kernel_size) // 2
                 current_layer = ZeroPadding2D(padding=padd)(current_layer)
 
             #Add the convolutional layer
@@ -82,6 +84,7 @@ def create_yolo_model(input_layer, configs, num_classes):
                                     strides=stride,
                                     use_bias = bias,
                                     padding="valid",
+                                    activation="linear",
                                     name=f"conv_{index}")(current_layer)
 
             #Add the Batch Normalization Layer
@@ -91,7 +94,9 @@ def create_yolo_model(input_layer, configs, num_classes):
             #Check the activation. 
             #It is either Linear or a Leaky ReLU for YOLOv3
             if activation == "leaky":
-                current_layer = LeakyReLU(alpha=0.1, name=f"leaky_{index}")(current_layer)
+                current_layer = LeakyReLU(alpha=0.001, name=f"leaky_{index}")(current_layer)
+
+        #------------------------------------------------------------------------------------------
 
         #If it's an upsampling layer
         #We use Bilinear2dUpsampling
@@ -100,6 +105,8 @@ def create_yolo_model(input_layer, configs, num_classes):
             current_layer = UpSampling2D(size=stride,
                                          interpolation="bilinear",
                                          name=f"upsample_{index}")(current_layer)
+        
+        #------------------------------------------------------------------------------------------
         
         #If it is a route layer
         elif (layer["type"] == "route"):
@@ -112,14 +119,16 @@ def create_yolo_model(input_layer, configs, num_classes):
             if len(layer["layers"]) > 1:
                 #end = layer["layers"][1] - index
                 end = layer["layers"][1]
-                filters = output_filters[index + start] + output_filters[end]
-                current_layer = tf.concat([outputs[index + start], outputs[end]],
+                filters = output_filters[index + start] + output_filters[end-1]
+                current_layer = tf.concat([outputs[index + start], outputs[end-1]],
                                            axis=-1,
                                            name=f"route_{index}")
             else:
                 filters = output_filters[index + start]
-                current_layer = outputs[index + start]
-        
+                current_layer = tf.identity(outputs[index + start],
+                                            name=f"route_{index}")
+
+        #------------------------------------------------------------------------------------------
 
         #shortcut corresponds to skip connection
         elif layer["type"] == "shortcut":
@@ -127,6 +136,7 @@ def create_yolo_model(input_layer, configs, num_classes):
             from_ = int(layer["from"])
             current_layer = Add(name=f"shortcut_{index}")([outputs[index - 1], outputs[index + from_]])
 
+        #------------------------------------------------------------------------------------------
         
         # Yolo detection layer
         elif layer["type"] == "yolo":
@@ -142,18 +152,69 @@ def create_yolo_model(input_layer, configs, num_classes):
             #batch_size = data.shape[0]
             
             stride = input_dim // out_shape[1]
-            grid_size = input_dim // stride
+            #grid_size = input_dim // stride
+            grid_size = out_shape[1]
             bounding_box_attrs = 5 + num_classes
+            anchors = [(x[0]/stride, x[1]/stride) for x in anchors]
 
-            current_layer = tf.reshape(current_layer, [-1, bounding_box_attrs*num_anchors, grid_size*grid_size])
-            current_layer = tf.transpose(current_layer, perm=[0, 2, 1])
-            current_layer = tf.reshape(current_layer, [-1, grid_size*grid_size*num_anchors, bounding_box_attrs])
+            current_layer = tf.reshape(current_layer, [-1, grid_size, grid_size, num_anchors, bounding_box_attrs])
+
+            box_centers = current_layer[:,:,:,:,0:2]
+            box_centers = tf.sigmoid(box_centers)
+
+            box_shape = current_layer[:, :, :, :, 2:4]
+
+            confidence = current_layer[:,:, :, :, 4:5]
+            confidence = tf.sigmoid(confidence)
+
+            classes = current_layer[:,:,:,:,5:]
+            classes = tf.sigmoid(classes)
+
+            grid = tf.range(grid_size)
+            cx, cy = tf.meshgrid(grid, grid)
+            cxy = tf.Variable([cx, cy])
+            cxy = tf.transpose(cxy, [1,2,0])
+            cxy = tf.tile(cxy, [1,1,num_anchors])
+            cxy = tf.reshape(cxy, [1, grid_size, grid_size, num_anchors, 2])
+            cxy = tf.cast(cxy, dtype="float32")
+            box_centers = box_centers + cxy
+            #box_centers *= stride
+
+            anchors = tf.cast(anchors, dtype="float32")
+
+            anchors = tf.tile(anchors, [grid_size*grid_size, 1])
+            anchors = tf.reshape(anchors, [1, grid_size, grid_size, num_anchors, 2])
+
+            box_shape = tf.exp(box_shape)*anchors
+
+            box = tf.concat([box_centers, box_shape, confidence], axis=-1)
+            box = box*stride
+
+            pred = tf.concat([box, classes], axis=-1)
+
+
+
+
+
+
+
+
+
+
+            '''
+            #current_layer = tf.reshape(current_layer, [-1, bounding_box_attrs*num_anchors, grid_size*grid_size])
+            #current_layer = tf.reshape(current_layer, [-1, grid_size*grid_size, bounding_box_attrs*num_anchors])
+            #print("current: ", current_layer.get_shape().as_list())
+            #current_layer = tf.transpose(current_layer, perm=[0, 2, 1])
+            #current_layer = tf.reshape(current_layer, [-1, grid_size*grid_size*num_anchors, bounding_box_attrs])
             #current_layer = tf.reshape(current_layer, [-1, num_anchors * out_shape[1] * out_shape[2], 5 + num_classes])
+
+            #current_layer = tf.reshape(current_layer, [-1, grid_size, grid_size, num_anchors, bounding_box_attrs])
 
             anchors = [(x[0]/stride, x[1]/stride) for x in anchors]
             
             #Sigmoid the  centre_X, centre_Y. and object confidencce
-            box_centers = current_layer[:,:,0:2]
+            box_centers = current_layer[:,:,:,0:2]
             box_centers = tf.sigmoid(box_centers)
             box_shape = current_layer[:, :, 2:4]
             confidence = current_layer[:,:,4:5]
@@ -164,14 +225,18 @@ def create_yolo_model(input_layer, configs, num_classes):
 
             grid = np.arange(grid_size)
             cx,cy = tf.meshgrid(grid, grid)
+            print("cx: ", cx.get_shape().as_list())
 
             cx = tf.cast(tf.reshape(cx, [-1,1]), dtype="float32")
+            print("cx: ", cx.get_shape().as_list())
             cy = tf.cast(tf.reshape(cy, [-1,1]), dtype="float32")
 
             
 
-            cxy = tf.concat([cx, cy], axis=-1)
+            cxy = tf.Variable([cx, cy])
+            print("cxy: ", cxy.get_shape().as_list())
             cxy = tf.tile(cxy, [1, num_anchors])
+            print("cxy: ", cxy.get_shape().as_list())
             cxy = tf.reshape(cxy, [1, -1, 2])
 
             box_centers += cxy
@@ -192,7 +257,8 @@ def create_yolo_model(input_layer, configs, num_classes):
             pred = tf.concat([box, classes], axis=-1)
             
             '''
-            current_layer = tf.reshape(current_layer, [-1, num_anchors * out_shape[1] * out_shape[2], 5 + num_classes])
+            '''
+            current_layer = tf.reshape(current_layer, [-1, num_anchors * grid_size * grid_size, 5 + num_classes])
 
             box_centers = current_layer[:, :, 0:2]
             box_shapes = current_layer[:, :, 2:4]
@@ -203,7 +269,7 @@ def create_yolo_model(input_layer, configs, num_classes):
             confidence = tf.sigmoid(confidence)
             classes = tf.sigmoid(classes)
 
-            anchors = tf.tile(anchors, [out_shape[1] * out_shape[2], 1])
+            #anchors = tf.tile(anchors, [out_shape[1] * out_shape[2], 1])
             box_shapes = tf.exp(box_shapes) * tf.cast(anchors, dtype=tf.float32)
 
             x = tf.range(out_shape[1], dtype=tf.float32)
@@ -220,6 +286,8 @@ def create_yolo_model(input_layer, configs, num_classes):
 
             pred = tf.concat([box_centers, box_shapes, confidence, classes], axis=-1)
             '''
+            pred = tf.reshape(pred, [-1, grid_size*grid_size*num_anchors, 5+num_classes])
+            
             if scale:
                 output_pred = tf.concat([output_pred, pred], axis=1)
             else:
@@ -231,7 +299,7 @@ def create_yolo_model(input_layer, configs, num_classes):
     
     #return (net_info, layer)
     model = Model(input_layer, output_pred)
-    model.summary()
+    #model.summary()
     return model
     #return output_pred
 

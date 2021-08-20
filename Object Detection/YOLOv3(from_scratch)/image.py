@@ -12,8 +12,8 @@ num_classes = 80
 class_name = './data/coco.names'
 max_output_size = 40
 max_output_size_per_class= 20
-iou_threshold = 0.3
-confidence_threshold = 0.3
+iou_threshold = 0.5
+confidence_threshold = 0.5
 
 cfgfile = './cfg/yolov3.cfg'
 weightsfile = './weights/yolov3.weights'
@@ -24,7 +24,7 @@ def main():
     input_layer = tf.keras.layers.Input(shape=model_size)
     model = create_yolo_model(input_layer, configs, num_classes)
     #model.load_weights(weightfile)
-    load_weights(model, configs, weightsfile)
+    #load_weights(model, configs, weightsfile)
 
     try:
         model.save_weights('./weights/yolov3_weights.tf')
