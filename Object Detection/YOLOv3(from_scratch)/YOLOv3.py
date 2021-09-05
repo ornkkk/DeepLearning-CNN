@@ -192,15 +192,6 @@ def create_yolo_model(input_layer, configs, num_classes):
 
             pred = tf.concat([box, classes], axis=-1)
 
-
-
-
-
-
-
-
-
-
             '''
             #current_layer = tf.reshape(current_layer, [-1, bounding_box_attrs*num_anchors, grid_size*grid_size])
             #current_layer = tf.reshape(current_layer, [-1, grid_size*grid_size, bounding_box_attrs*num_anchors])
